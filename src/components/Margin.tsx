@@ -1,12 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { placeNotes, type Side } from "@/lib/layout";
 import type { Note } from "@/lib/store";
 
 const GAP = 22;
-const WIDE = "(min-width: 1120px)";
+const RAIL_WIDTH = 260;
+const RAIL_GAP = 48; // between the writing and a comment; globals.css leaves room for both
+const WIDE = "(min-width: 1120px)"; // room for comments on the right
+const VERY_WIDE = "(min-width: 1340px)"; // room on both sides
 
-type Place = { top: number; path: string };
+type Place = { top: number; left: number; side: Side; path: string };
 
 type Props = {
   root: React.RefObject<HTMLDivElement | null>;
@@ -14,13 +18,10 @@ type Props = {
   /** Changes whenever the page might have reflowed. */
   layoutKey: unknown;
   active: string;
-  replying: string;
   onActive: (id: string) => void;
-  onReply: (note: Note, text: string) => void;
-  onResolve: (id: string) => void;
 };
 
-export default function Margin({ root, notes, layoutKey, active, replying, onActive, onReply, onResolve }: Props) {
+export default function Margin({ root, notes, layoutKey, active, onActive }: Props) {
   const rail = useRef<HTMLDivElement>(null);
   const cards = useRef(new Map<string, HTMLElement>());
   const [places, setPlaces] = useState<Record<string, Place>>({});
@@ -31,25 +32,37 @@ export default function Margin({ root, notes, layoutKey, active, replying, onAct
     const host = root.current;
     const side = rail.current;
     if (!host || !side) return;
-    const isWide = window.matchMedia(WIDE).matches;
-    setWide(isWide);
+    const page = host.querySelector("main");
+    if (!page) return;
+    setWide(window.matchMedia(WIDE).matches);
+    const sides: Side[] = window.matchMedia(VERY_WIDE).matches ? ["right", "left"] : ["right"];
     const base = host.getBoundingClientRect();
-    const left = side.getBoundingClientRect().left - base.left;
+    const column = page.getBoundingClientRect();
+    const columnLeft = column.left - base.left;
+    const columnRight = column.right - base.left;
 
-    const found: { id: string; top: number; start?: { x: number; y: number } }[] = [];
+    const found: { id: string; top: number; line?: { left: number; right: number; y: number } }[] = [];
     const gone: string[] = [];
+    const block = document.createRange();
     for (const note of notes) {
       const spans = [...host.querySelectorAll(`[data-note-anchor="${note.id}"]`)];
       spans.forEach((el) => el.classList.toggle("is-active", note.id === active));
       if (!note.anchored) {
         found.push({ id: note.id, top: 0 });
       } else if (spans.length) {
-        const rects = spans.at(-1)!.getClientRects();
-        const end = rects[rects.length - 1];
+        const line = spans[0].getClientRects()[0];
+        // Find where this line's text starts and ends, so threads only cross empty space.
+        block.selectNodeContents(spans[0].closest("p, li, h1, h2, h3, blockquote") ?? spans[0]);
+        const middle = line.top + line.height / 2;
+        const rects = [...block.getClientRects()].filter((r) => r.top <= middle && r.bottom >= middle);
         found.push({
           id: note.id,
-          top: spans[0].getBoundingClientRect().top - base.top - 2,
-          start: { x: end.right - base.left + 3, y: end.bottom - base.top - 5 },
+          top: line.top - base.top - 2,
+          line: {
+            left: Math.min(line.left, ...rects.map((r) => r.left)) - base.left - 6,
+            right: Math.max(line.right, ...rects.map((r) => r.right)) - base.left + 6,
+            y: line.bottom - base.top - 4,
+          },
         });
       } else {
         gone.push(note.id); // Their passage was deleted; undo brings the comment back.
@@ -57,21 +70,24 @@ export default function Margin({ root, notes, layoutKey, active, replying, onAct
     }
     found.sort((a, b) => a.top - b.top);
 
+    const slots = found.map(({ id, top }) => ({ id, top, height: cards.current.get(id)?.offsetHeight ?? 0 }));
     const next: Record<string, Place> = {};
-    let floor = 0;
-    for (const item of found) {
-      const top = Math.max(item.top, floor);
-      floor = top + (cards.current.get(item.id)?.offsetHeight ?? 0) + GAP;
+    placeNotes(slots, sides, GAP).forEach(({ id, top, side }, i) => {
+      const onRight = side === "right";
+      const left = onRight ? columnRight + RAIL_GAP : columnLeft - RAIL_GAP - RAIL_WIDTH;
       let path = "";
-      if (item.start) {
-        const { x, y } = item.start;
-        const endX = left - 12;
+      const line = found[i].line;
+      if (line) {
+        const x = onRight ? line.right : line.left;
+        const edge = onRight ? columnRight + 8 : columnLeft - 8;
+        const endX = onRight ? columnRight + RAIL_GAP - 10 : columnLeft - RAIL_GAP + 10;
         const endY = top + 13;
-        const pull = Math.max(36, (endX - x) * 0.55);
-        path = `M${x} ${y} C${x + pull} ${y + 6} ${endX - pull} ${endY} ${endX} ${endY}`;
+        const bend = (endX - edge) / 2;
+        // Along the empty end of the line, then any drop happens in the gutter.
+        path = `M${x} ${line.y} L${edge} ${line.y} C${edge + bend} ${line.y} ${endX - bend} ${endY} ${endX} ${endY}`;
       }
-      next[item.id] = { top, path };
-    }
+      next[id] = { top, left, side, path };
+    });
     setPlaces((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next));
     setHidden((old) => (old.join() === gone.join() ? old : gone));
   }, [root, notes, active]);
@@ -87,25 +103,19 @@ export default function Margin({ root, notes, layoutKey, active, replying, onAct
   }, [root, measure]);
 
   const shown = notes.filter((n) => !hidden.includes(n.id));
+  const parent = (note: Note) => shown.find((n) => n.id === note.replyTo)?.turns[0]?.text;
 
   return (
     <>
       {wide && (
         <svg className="tinkr-threads" aria-hidden>
-          <defs>
-            <filter id="tinkr-pencil">
-              <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="2" seed="4" />
-              <feDisplacementMap in="SourceGraphic" scale="2.2" />
-            </filter>
-          </defs>
           {shown.map((note) =>
             places[note.id]?.path ? (
               <path
                 key={note.id}
+                className={`tinkr-thread ${note.id === active ? "is-active" : ""}`}
                 d={places[note.id].path}
                 pathLength={1}
-                filter="url(#tinkr-pencil)"
-                className={note.id === active ? "is-active" : ""}
               />
             ) : null,
           )}
@@ -119,51 +129,39 @@ export default function Margin({ root, notes, layoutKey, active, replying, onAct
               if (el) cards.current.set(note.id, el);
               else cards.current.delete(note.id);
             }}
-            className={`tinkr-note ${note.id === active ? "is-active" : ""}`}
-            style={wide ? { top: places[note.id]?.top ?? 0 } : undefined}
+            className={`tinkr-note ${note.id === active ? "is-active" : ""} ${
+              wide && places[note.id]?.side === "left" ? "is-left" : ""
+            }`}
+            style={
+              wide
+                ? { top: places[note.id]?.top ?? 0, left: places[note.id]?.left ?? 0, width: RAIL_WIDTH }
+                : undefined
+            }
             onClick={() => onActive(note.id)}
           >
+            {parent(note) && (
+              <button
+                type="button"
+                className="tinkr-re"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onActive(note.replyTo!);
+                  cards.current.get(note.replyTo!)?.scrollIntoView({ block: "center", behavior: "smooth" });
+                }}
+              >
+                re: {parent(note)}
+              </button>
+            )}
             {note.turns.map((turn, i) =>
               turn.role === "partner" ? (
-                <p key={i} className="tinkr-voice">{turn.text || "…"}</p>
+                <p key={i} className="tinkr-voice whitespace-pre-wrap">{turn.text || "…"}</p>
               ) : (
                 <p key={i} className="tinkr-reply">{turn.text}</p>
               ),
-            )}
-            {note.id === active && (
-              <Reply busy={replying === note.id} onSend={(text) => onReply(note, text)} onResolve={() => onResolve(note.id)} />
             )}
           </article>
         ))}
       </div>
     </>
-  );
-}
-
-function Reply({ busy, onSend, onResolve }: { busy: boolean; onSend: (text: string) => void; onResolve: () => void }) {
-  const [draft, setDraft] = useState("");
-  return (
-    <div className="mt-2">
-      <textarea
-        className="tinkr-ask is-small"
-        rows={1}
-        value={draft}
-        placeholder="Reply…"
-        aria-label="Reply to this comment"
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            const text = draft.trim();
-            if (!text || busy) return;
-            setDraft("");
-            onSend(text);
-          }
-        }}
-      />
-      <button type="button" className="tinkr-quiet mt-2 !text-[13px]" onClick={onResolve}>
-        Resolve
-      </button>
-    </div>
   );
 }

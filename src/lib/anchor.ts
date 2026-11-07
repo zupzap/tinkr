@@ -48,13 +48,3 @@ export function addAnchor(state: EditorState, id: string, range: Range): Transac
     .setMeta("tinkr", true)
     .setMeta("addToHistory", false);
 }
-
-export function removeAnchor(state: EditorState, id: string): Transaction {
-  const tr = state.tr.setMeta("tinkr", true).setMeta("addToHistory", false);
-  state.doc.descendants((node, pos) => {
-    for (const mark of node.marks) {
-      if (mark.type.name === ANCHOR && mark.attrs.id === id) tr.removeMark(pos, pos + node.nodeSize, mark);
-    }
-  });
-  return tr;
-}

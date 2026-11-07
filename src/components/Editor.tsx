@@ -6,7 +6,8 @@ import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import { addAnchor, ANCHOR, findRange, removeAnchor } from "@/lib/anchor";
+import { addAnchor, ANCHOR, findRange } from "@/lib/anchor";
+import { readMoment, type Moment } from "@/lib/moment";
 import type { Move } from "@/lib/store";
 
 const NoteAnchor = Mark.create({
@@ -33,10 +34,9 @@ const NoteAnchor = Mark.create({
 export type EditorHandle = {
   focus: () => void;
   /** The writing around the cursor, and whether now is a natural moment to respond. */
-  context: () => { focus: string; urgent: boolean };
+  context: () => Moment & { focus: string; line: string };
   /** Underlines the passage a comment is about. False if the page has nothing to underline. */
   anchor: (id: string, quote: string) => boolean;
-  unanchor: (id: string) => void;
 };
 
 export type Change = { content: JSONContent; text: string; typed: boolean };
@@ -76,17 +76,17 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ content, onChan
     () => ({
       focus: () => editor?.commands.focus("end"),
       context: () => {
-        if (!editor) return { focus: "", urgent: false };
+        if (!editor) return { focus: "", line: "", ...readMoment("") };
         const { $from } = editor.state.selection;
         const line = $from.parent.textContent.trim();
-        if (line) return { focus: line, urgent: line.endsWith("?") };
+        if (line) return { focus: line, line, ...readMoment(line) };
         // On a fresh line: they just finished the block above.
         let index = $from.index(0);
         while (index-- > 0) {
           const block = editor.state.doc.child(index);
-          if (block.textContent.trim()) return { focus: block.textContent, urgent: true };
+          if (block.textContent.trim()) return { focus: block.textContent, line, ...readMoment("") };
         }
-        return { focus: "", urgent: false };
+        return { focus: "", line, ...readMoment("") };
       },
       anchor: (id, quote) => {
         if (!editor) return false;
@@ -94,9 +94,6 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ content, onChan
         if (!range) return false;
         editor.view.dispatch(addAnchor(editor.state, id, range));
         return true;
-      },
-      unanchor: (id) => {
-        if (editor) editor.view.dispatch(removeAnchor(editor.state, id));
       },
     }),
     [editor],

@@ -1,6 +1,6 @@
 import type { JSONContent } from "@tiptap/react";
 
-export type Move = "auto" | "pushback" | "clarify" | "deeper" | "stuck";
+export type Move = "auto" | "pushback" | "clarify" | "deeper";
 export type Lens = "open" | "product";
 
 export type FeedItem = { id: string; role: "you" | "partner"; text: string; at: number };
@@ -8,7 +8,15 @@ export type FeedItem = { id: string; role: "you" | "partner"; text: string; at: 
 export type Turn = { role: "you" | "partner"; text: string };
 
 /** A comment in the margin. Its passage is marked in the document by the same id. */
-export type Note = { id: string; quote: string; anchored: boolean; turns: Turn[]; at: number };
+export type Note = {
+  id: string;
+  quote: string;
+  anchored: boolean;
+  turns: Turn[];
+  at: number;
+  /** The earlier comment their writing was answering, when it was. */
+  replyTo?: string;
+};
 
 export type Doc = {
   id: string;
@@ -21,7 +29,7 @@ export type Doc = {
   updatedAt: number;
 };
 
-export type Saved = { docs: Doc[]; activeId: string; quiet: boolean };
+export type Saved = { docs: Doc[]; activeId: string };
 
 export type Starter = { name: string; hint: string; lens: Lens; sections: string[] };
 
@@ -82,7 +90,11 @@ function upgrade(doc: Doc): Doc {
     ...doc,
     content,
     lens: doc.lens ?? "open",
-    notes: doc.notes ?? [],
+    // Replies written on the page used to be copied into threads; the page already has them.
+    notes: (doc.notes ?? []).map((n) => ({
+      ...n,
+      turns: n.turns.filter((t) => !("page" in t)),
+    })),
     feed: doc.feed.filter((i) => i.role === "you" || i.role === "partner"),
   };
 }
@@ -96,14 +108,14 @@ export function load(): Saved {
         const activeId = saved.docs.some((d) => d.id === saved.activeId)
           ? saved.activeId
           : saved.docs[0].id;
-        return { docs: saved.docs.map(upgrade), activeId, quiet: !!saved.quiet };
+        return { docs: saved.docs.map(upgrade), activeId };
       }
     }
   } catch {
     // Unreadable or blocked storage: start fresh rather than fail to open.
   }
   const doc = newDoc();
-  return { docs: [doc], activeId: doc.id, quiet: false };
+  return { docs: [doc], activeId: doc.id };
 }
 
 export function save(state: Saved): boolean {

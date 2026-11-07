@@ -109,16 +109,6 @@ body {
   color: var(--ink);
 }
 
-/* Row above the title */
-.tinkr-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 22px;
-  min-height: 24px;
-  margin-bottom: 12px;
-}
-
 .tinkr-quiet {
   display: inline-flex;
   align-items: center;
@@ -142,68 +132,9 @@ body {
   cursor: default;
 }
 
-.tinkr-lamp {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--lamp);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--lamp) 60%, transparent);
-}
-
-.tinkr-lamp.is-off {
-  background: var(--line);
-  box-shadow: none;
-}
-
-.tinkr-caret {
-  width: 6px;
-  height: 6px;
-  margin: -3px 0 0 1px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: rotate(45deg);
-}
-
 .tinkr-status {
   color: var(--muted);
   font-size: 13px;
-}
-
-.tinkr-popover {
-  position: absolute;
-  z-index: 40;
-  top: calc(100% + 8px);
-  left: -10px;
-  display: grid;
-  width: 240px;
-  padding: 5px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--raised);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 0.4);
-}
-
-.tinkr-popover button {
-  padding: 8px 10px;
-  border-radius: 6px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.tinkr-popover button:hover,
-.tinkr-popover button[aria-pressed="true"] {
-  background: var(--line);
-}
-
-.tinkr-popover strong {
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.tinkr-popover small {
-  color: var(--muted);
-  font-size: 12.5px;
 }
 
 /* The page */
@@ -316,16 +247,14 @@ body {
 /* The page and its margin */
 .tinkr-sheet {
   position: relative;
-  display: grid;
-  width: 100%;
-  max-width: 46rem;
-  margin-inline: auto;
   padding-inline: 24px;
 }
 
 .tinkr-rail {
   display: grid;
   gap: 22px;
+  max-width: 46rem;
+  margin-inline: auto;
   padding-bottom: 80px;
 }
 
@@ -333,23 +262,26 @@ body {
   display: none;
 }
 
+/* Comments are placed from the writing column, so these only need to leave room. */
 @media (min-width: 1120px) {
   .tinkr-sheet {
-    max-width: 1160px;
-    grid-template-columns: minmax(0, 1fr) 280px;
-    column-gap: 72px;
+    padding-right: 332px;
   }
 
   .tinkr-rail {
-    position: relative;
+    position: absolute;
+    z-index: 2;
     display: block;
-    padding-bottom: 0;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    inset: 0;
+    pointer-events: none;
   }
 
   .tinkr-note {
     position: absolute;
-    right: 0;
-    left: 0;
+    pointer-events: auto;
     transition: top 0.25s ease;
   }
 
@@ -365,18 +297,18 @@ body {
   }
 }
 
-.tinkr-threads path {
+.tinkr-thread {
   fill: none;
   stroke: var(--muted);
   stroke-dasharray: 1;
   stroke-linecap: round;
-  stroke-width: 1.1;
+  stroke-width: 1;
   opacity: 0.32;
   animation: tinkr-draw 0.7s ease-out both;
   transition: opacity 0.2s;
 }
 
-.tinkr-threads path.is-active {
+.tinkr-thread.is-active {
   opacity: 0.85;
 }
 
@@ -431,8 +363,43 @@ body {
   line-height: 1.5;
 }
 
-.tinkr-note .is-small {
-  font-size: 14.5px;
+.tinkr-voice + .tinkr-voice {
+  margin-top: 10px;
+}
+
+/* Long comments fold so they stay beside their passage. Clicking one opens it. */
+.tinkr-note:not(.is-active) .tinkr-voice {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 7;
+}
+
+.tinkr-note.is-left {
+  padding-right: 16px;
+  padding-left: 0;
+}
+
+.tinkr-note.is-left::before {
+  right: 0;
+  left: auto;
+}
+
+.tinkr-re {
+  display: block;
+  width: 100%;
+  margin-bottom: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tinkr-re:hover {
+  color: var(--ink);
 }
 
 /* Selection moves */
@@ -611,7 +578,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .tinkr-mark.is-reading,
   .tinkr-note,
-  .tinkr-threads path {
+  .tinkr-thread {
     animation: none;
   }
 
@@ -625,5 +592,11 @@ body {
 @media (max-width: 1119px) {
   .tinkr-note {
     position: relative;
+  }
+}
+
+@media (min-width: 1340px) {
+  .tinkr-sheet {
+    padding-inline: 332px;
   }
 }

@@ -4,24 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Chat from "./Chat";
 import Editor, { type Change, type EditorHandle } from "./Editor";
 import Margin from "./Margin";
-import { load, newDoc, save, STARTERS, uid, type Doc, type Lens, type Move, type Note, type Starter } from "@/lib/store";
+import { kept } from "@/lib/moment";
+import { load, newDoc, save, STARTERS, uid, type Doc, type Move, type Note, type Starter } from "@/lib/store";
 
-const PAUSE_MS = 1800; // a pause mid-thought
-const URGENT_PAUSE_MS = 800; // just finished a paragraph or asked a question
 const MIN_GAP_MS = 9000; // least time between comments, unless it's a natural moment
 const MIN_NEW_CHARS = 30;
 const MIN_URGENT_CHARS = 4;
 const MIN_TEXT = 12;
 
-const TAKE_STOCK =
-  "Take stock of this page. In short plain lines under the labels Decided, Assumed, Open and Next, list what is settled, what is assumed without evidence, what is unresolved, and the single next thing to find out. Use only what is on the page.";
-
-const LENSES: { value: Lens; label: string; hint: string }[] = [
-  { value: "open", label: "Open", hint: "Any kind of thinking" },
-  { value: "product", label: "Product", hint: "Users, evidence, metrics, smallest test" },
-];
-
-type Panel = "pages" | "chat" | "mode" | "lens" | null;
+type Panel = "pages" | "chat" | null;
 
 async function streamReply(body: object, onText: (text: string) => void) {
   const res = await fetch("/api/partner", {
@@ -47,10 +38,8 @@ const message = (err: unknown) =>
 export default function Tinkr() {
   const [docs, setDocs] = useState<Doc[] | null>(null);
   const [activeId, setActiveId] = useState("");
-  const [quiet, setQuiet] = useState(false);
   const [reading, setReading] = useState(false);
   const [chatting, setChatting] = useState(false);
-  const [replying, setReplying] = useState("");
   const [activeNote, setActiveNote] = useState("");
   const [error, setError] = useState("");
   const [chatError, setChatError] = useState("");
@@ -63,26 +52,26 @@ export default function Tinkr() {
   const chatInput = useRef<HTMLTextAreaElement>(null);
   const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
   const lastRead = useRef(new Map<string, { len: number; at: number }>());
-  const live = useRef({ docs, activeId, quiet, reading });
-  live.current = { docs, activeId, quiet, reading };
+  const inFlight = useRef<{ controller: AbortController; focus: string } | null>(null);
+  const live = useRef({ docs, activeId, reading });
+  live.current = { docs, activeId, reading };
 
   useEffect(() => {
     const saved = load();
     setDocs(saved.docs);
     setActiveId(saved.activeId);
-    setQuiet(saved.quiet);
   }, []);
 
   useEffect(() => {
     if (!docs) return;
-    const write = () => setSaveFailed(!save({ docs, activeId, quiet }));
+    const write = () => setSaveFailed(!save({ docs, activeId }));
     const timer = setTimeout(write, 300);
     window.addEventListener("pagehide", write);
     return () => {
       clearTimeout(timer);
       window.removeEventListener("pagehide", write);
     };
-  }, [docs, activeId, quiet]);
+  }, [docs, activeId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -115,12 +104,16 @@ export default function Tinkr() {
       const doc = docs?.find((d) => d.id === activeId);
       if (!doc || reading) return;
       const seen = doc.text.length;
+      const focus = editor.current?.context().focus ?? "";
+      const controller = new AbortController();
+      if (move === "auto") inFlight.current = { controller, focus };
       setReading(true);
       setError("");
       try {
         const res = await fetch("/api/partner", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             mode: "note",
             move,
@@ -128,8 +121,8 @@ export default function Tinkr() {
             title: doc.title,
             text: doc.text,
             selection,
-            focus: editor.current?.context().focus ?? "",
-            recent: doc.notes.map((n) => n.turns[0]?.text ?? ""),
+            focus,
+            recent: doc.notes.slice(-10).map((n) => ({ id: n.id, text: n.turns[0]?.text ?? "", quote: n.quote })),
           }),
         });
         const data = await res.json();
@@ -147,14 +140,17 @@ export default function Tinkr() {
             anchored,
             turns: [{ role: "partner", text: data.note.text }],
             at: Date.now(),
+            replyTo: data.note.replyTo,
           };
           patch(doc.id, (d) => ({ notes: [...d.notes, note] }));
           if (move !== "auto") setActiveNote(id);
         }
       } catch (err) {
-        setError(message(err));
+        if (!controller.signal.aborted) setError(message(err));
       } finally {
-        lastRead.current.set(doc.id, { len: seen, at: Date.now() });
+        // A cancelled read saw nothing, so the next pause should read again.
+        if (!controller.signal.aborted) lastRead.current.set(doc.id, { len: seen, at: Date.now() });
+        inFlight.current = null;
         setReading(false);
       }
     },
@@ -163,9 +159,9 @@ export default function Tinkr() {
 
   const readAlong = useCallback(
     function check() {
-      const { docs, activeId, quiet, reading } = live.current;
+      const { docs, activeId, reading } = live.current;
       const doc = docs?.find((d) => d.id === activeId);
-      if (!doc || quiet || doc.text.trim().length < MIN_TEXT) return;
+      if (!doc || doc.text.trim().length < MIN_TEXT) return;
       const urgent = editor.current?.context().urgent ?? false;
       const last = lastRead.current.get(doc.id);
       const fresh = last ? Math.abs(doc.text.length - last.len) : Infinity;
@@ -187,13 +183,16 @@ export default function Tinkr() {
       if (!typed) return;
       setActiveNote("");
       clearTimeout(pause.current);
-      const urgent = editor.current?.context().urgent;
-      pause.current = setTimeout(readAlong, urgent ? URGENT_PAUSE_MS : PAUSE_MS);
+      const moment = editor.current?.context();
+      if (!moment) return;
+      // Never let a comment land on a passage they're still writing.
+      if (inFlight.current && kept(moment.line, inFlight.current.focus)) inFlight.current.controller.abort();
+      pause.current = setTimeout(readAlong, moment.delay);
     },
     [patch, readAlong],
   );
 
-  const ask = async (text: string, shown = text) => {
+  const ask = async (text: string) => {
     const { docs, activeId } = live.current;
     const doc = docs?.find((d) => d.id === activeId);
     if (!doc) return;
@@ -203,7 +202,7 @@ export default function Tinkr() {
     const reply = uid();
     const at = Date.now();
     patch(doc.id, (d) => ({
-      feed: [...d.feed, { id: uid(), role: "you", text: shown, at }, { id: reply, role: "partner", text: "", at }],
+      feed: [...d.feed, { id: uid(), role: "you", text, at }, { id: reply, role: "partner", text: "", at }],
     }));
     setChatting(true);
     setChatError("");
@@ -222,41 +221,6 @@ export default function Tinkr() {
     } finally {
       setChatting(false);
     }
-  };
-
-  const replyTo = async (note: Note, text: string) => {
-    const { docs, activeId } = live.current;
-    const doc = docs?.find((d) => d.id === activeId);
-    if (!doc) return;
-    const setTurns = (change: (turns: Note["turns"]) => Note["turns"]) =>
-      patch(doc.id, (d) => ({
-        notes: d.notes.map((n) => (n.id === note.id ? { ...n, turns: change(n.turns) } : n)),
-      }));
-    const history = note.turns.map((t) => ({ role: t.role === "you" ? "user" : "assistant", content: t.text }));
-    setTurns((t) => [...t, { role: "you", text }, { role: "partner", text: "" }]);
-    setReplying(note.id);
-    setError("");
-    let got = false;
-    try {
-      await streamReply(
-        { message: text, history, quote: note.quote, lens: doc.lens, title: doc.title, text: doc.text },
-        (answer) => {
-          got = true;
-          setTurns((t) => [...t.slice(0, -1), { role: "partner", text: answer }]);
-        },
-      );
-    } catch (err) {
-      if (!got) setTurns((t) => t.slice(0, -1));
-      setError(message(err));
-    } finally {
-      setReplying("");
-    }
-  };
-
-  const resolve = (id: string) => {
-    editor.current?.unanchor(id);
-    patch(live.current.activeId, (d) => ({ notes: d.notes.filter((n) => n.id !== id) }));
-    setActiveNote("");
   };
 
   const open = (id: string) => {
@@ -287,7 +251,6 @@ export default function Tinkr() {
 
   const doc = docs.find((d) => d.id === activeId) ?? docs[0];
   const sorted = [...docs].sort((a, b) => b.updatedAt - a.updatedAt);
-  const lens = LENSES.find((l) => l.value === doc.lens) ?? LENSES[0];
 
   return (
     <div className="h-dvh overflow-y-auto">
@@ -307,6 +270,9 @@ export default function Tinkr() {
             <span className={`tinkr-mark ${reading ? "is-reading" : ""}`} aria-hidden />
             tinkr.
           </span>
+          <span className="tinkr-status" role="status">
+            {error}
+          </span>
         </div>
         <button type="button" className="tinkr-pill" onClick={() => setPanel(panel === "chat" ? null : "chat")}>
           <span className="tinkr-mark" aria-hidden />
@@ -322,89 +288,7 @@ export default function Tinkr() {
           if (hit) setActiveNote(hit.getAttribute("data-note-anchor") ?? "");
         }}
       >
-        <main className="min-w-0 pb-[45vh] pt-6">
-          <div className="tinkr-row">
-            <div className="relative">
-              <button
-                type="button"
-                className="tinkr-quiet"
-                aria-expanded={panel === "mode"}
-                onClick={() => setPanel(panel === "mode" ? null : "mode")}
-              >
-                <span className={`tinkr-lamp ${quiet ? "is-off" : ""}`} aria-hidden />
-                {quiet ? "When you ask" : "Thinks with you"}
-                <span className="tinkr-caret" aria-hidden />
-              </button>
-              {panel === "mode" && (
-                <div className="tinkr-popover">
-                  {[
-                    { value: false, label: "Thinks with you", hint: "Comments as you write" },
-                    { value: true, label: "When you ask", hint: "Stays silent until you ask" },
-                  ].map((option) => (
-                    <button
-                      key={option.label}
-                      type="button"
-                      aria-pressed={quiet === option.value}
-                      onClick={() => {
-                        setQuiet(option.value);
-                        setPanel(null);
-                      }}
-                    >
-                      <strong>{option.label}</strong>
-                      <small>{option.hint}</small>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="relative">
-              <button
-                type="button"
-                className="tinkr-quiet"
-                aria-expanded={panel === "lens"}
-                onClick={() => setPanel(panel === "lens" ? null : "lens")}
-              >
-                {lens.label} lens
-                <span className="tinkr-caret" aria-hidden />
-              </button>
-              {panel === "lens" && (
-                <div className="tinkr-popover">
-                  {LENSES.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      aria-pressed={doc.lens === option.value}
-                      onClick={() => {
-                        patch(doc.id, () => ({ lens: option.value }));
-                        setPanel(null);
-                      }}
-                    >
-                      <strong>{option.label}</strong>
-                      <small>{option.hint}</small>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <button type="button" className="tinkr-quiet" disabled={reading} onClick={() => requestNote("stuck")}>
-              I&apos;m stuck
-            </button>
-            <button
-              type="button"
-              className="tinkr-quiet"
-              disabled={chatting}
-              onClick={() => {
-                setPanel("chat");
-                void ask(TAKE_STOCK, "Take stock");
-              }}
-            >
-              Take stock
-            </button>
-            <span className="tinkr-status" role="status">
-              {error || (reading ? "Reading…" : "")}
-            </span>
-          </div>
-
+        <main className="mx-auto w-full min-w-0 max-w-[46rem] pb-[45vh] pt-10">
           <textarea
             key={`title-${doc.id}`}
             className="tinkr-title"
@@ -432,14 +316,11 @@ export default function Tinkr() {
           notes={doc.notes}
           layoutKey={doc.content}
           active={activeNote}
-          replying={replying}
           onActive={setActiveNote}
-          onReply={replyTo}
-          onResolve={resolve}
         />
       </div>
 
-      {(panel === "pages" || panel === "mode" || panel === "lens") && (
+      {panel === "pages" && (
         <button type="button" className="tinkr-scrim" aria-label="Close" onClick={() => setPanel(null)} />
       )}
 

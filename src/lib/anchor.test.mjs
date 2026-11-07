@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Schema } from "@tiptap/pm/model";
 import { EditorState, TextSelection } from "@tiptap/pm/state";
-import { addAnchor, findRange, removeAnchor } from "./anchor.ts";
+import { addAnchor, findRange } from "./anchor.ts";
 
 const schema = new Schema({
   nodes: {
@@ -68,11 +68,10 @@ test("anchoring leaves the cursor, text and undo history alone", () => {
   assert.equal(tr.getMeta("addToHistory"), false);
 });
 
-test("two comments can share a passage, and removing one keeps the other", () => {
+test("two comments can share a passage", () => {
   let s = state([p("Users never read.")], 1);
   s = s.apply(addAnchor(s, "a", { from: 1, to: 12 }));
   s = s.apply(addAnchor(s, "b", { from: 7, to: 18 }));
-  s = s.apply(removeAnchor(s, "a"));
-  assert.equal(marked(s, "a"), "");
+  assert.equal(marked(s, "a"), "Users never");
   assert.equal(marked(s, "b"), "never read.");
 });
