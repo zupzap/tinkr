@@ -45,7 +45,7 @@ export default function Margin({ root, notes, layoutKey, active, onActive }: Pro
     const gone: string[] = [];
     const block = document.createRange();
     for (const note of notes) {
-      const spans = [...host.querySelectorAll(`[data-note-anchor="${note.id}"]`)];
+      const spans = [...host.querySelectorAll(`[data-note-anchor="${CSS.escape(note.id)}"]`)];
       spans.forEach((el) => el.classList.toggle("is-active", note.id === active));
       if (!note.anchored) {
         found.push({ id: note.id, top: 0 });

@@ -402,6 +402,28 @@ body {
   color: var(--ink);
 }
 
+.tinkr-notice {
+  position: fixed;
+  z-index: 15;
+  bottom: 16px;
+  left: 16px;
+  max-width: min(340px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.tinkr-notice button {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
 /* Selection moves */
 .tinkr-bubble {
   display: flex;

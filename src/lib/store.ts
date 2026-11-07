@@ -118,6 +118,24 @@ export function load(): Saved {
   return { docs: [doc], activeId: doc.id };
 }
 
+const NOTICE_KEY = "tinkr.notice";
+
+export function noticeSeen() {
+  try {
+    return localStorage.getItem(NOTICE_KEY) === "seen";
+  } catch {
+    return false;
+  }
+}
+
+export function markNoticeSeen() {
+  try {
+    localStorage.setItem(NOTICE_KEY, "seen");
+  } catch {
+    // Blocked storage only means they see the notice again next time.
+  }
+}
+
 export function save(state: Saved): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));

@@ -1,9 +1,18 @@
+import { createLimiter, fromOwnSite } from "@/lib/guard";
 import { parseNote } from "@/lib/parseNote";
+import { SITES } from "@/lib/sites";
 import type { Lens, Move } from "@/lib/store";
 
 export const maxDuration = 60;
 
 const MAX_DOC = 24000;
+const MAX_BODY = 200_000;
+const MAX_TURN = 1000;
+const MIN_TEXT = 12; // matches the client: below this there's nothing to read
+const UPSTREAM_TIMEOUT_MS = 45_000;
+
+
+const allow = createLimiter({ perMinute: 30, perDay: 500, everyonePerDay: 5000 });
 
 const CHARACTER = `You are tinkr, a thinking partner inside a writing app. Someone is writing, and you read along and leave short comments in the margin beside their words. Your job is to help them think better and keep going. They are the author. You never write their text for them.
 
@@ -59,12 +68,13 @@ const REQUESTED = `They asked for this, so always give a comment. Never return n
 type Message = { role: "user" | "assistant"; content: string };
 
 function system(lens: unknown, ...parts: string[]) {
-  return [CHARACTER, LENSES[lens as Lens], ...parts].filter(Boolean).join("\n\n");
+  const extra = Object.hasOwn(LENSES, String(lens)) ? LENSES[lens as Lens] : "";
+  return [CHARACTER, extra, ...parts].filter(Boolean).join("\n\n");
 }
 
 function page(title: string, text: string) {
   const body = text.length > MAX_DOC ? `[earlier text omitted]\n${text.slice(-MAX_DOC)}` : text;
-  return `Title: ${title || "(untitled)"}\n\n<document>\n${body || "(empty page)"}\n</document>`;
+  return `Title: ${title.slice(0, 300) || "(untitled)"}\n\n<document>\n${body || "(empty page)"}\n</document>`;
 }
 
 /** Wraps the newest writing in <new> tags so the model knows what to respond to. */
@@ -82,12 +92,12 @@ async function model(body: object, signal: AbortSignal) {
   const base = process.env.AI_BASE_URL?.replace(/\/$/, "");
   const key = process.env.AI_API_KEY;
   const name = process.env.AI_MODEL;
-  if (!base || !key || !name) throw new Error("AI is not configured. Fill in .env.local.");
+  if (!base || !key || !name) throw new Error("AI is not configured.");
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: name, ...body }),
-    signal,
+    signal: AbortSignal.any([signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]),
   });
   if (!res.ok) {
     console.error("partner upstream error", res.status, (await res.text()).slice(0, 300));
@@ -99,12 +109,15 @@ async function model(body: object, signal: AbortSignal) {
 type Earlier = { id: string; text: string; quote: string };
 
 async function note(input: Record<string, unknown>, signal: AbortSignal) {
-  const move = (input.move as Move) in MOVES ? (input.move as Move) : "auto";
+  const move = Object.hasOwn(MOVES, String(input.move)) ? (input.move as Move) : "auto";
   const focus = String(input.focus ?? "").slice(0, 2000);
   const selection = String(input.selection ?? "").slice(0, 4000);
-  const earlier = (Array.isArray(input.recent) ? (input.recent as Earlier[]) : []).slice(-10);
+  const earlier = (Array.isArray(input.recent) ? (input.recent as Earlier[]) : [])
+    .slice(-10)
+    .map((c) => ({ id: String(c.id), text: String(c.text).slice(0, MAX_TURN), quote: String(c.quote).slice(0, 500) }));
 
   const text = String(input.text ?? "");
+  if (text.trim().length < MIN_TEXT) return Response.json({ note: null });
   const user = [
     page(String(input.title ?? ""), move === "auto" ? markNew(text, focus) : text),
     selection && `Selected passage:\n${selection}`,
@@ -136,8 +149,9 @@ async function ask(input: Record<string, unknown>, signal: AbortSignal) {
   const message = String(input.message ?? "").trim().slice(0, 4000);
   if (!message) return fail("Nothing to answer.", 400);
   const history = (Array.isArray(input.history) ? (input.history as Message[]) : [])
-    .slice(-12)
-    .filter((t) => (t.role === "user" || t.role === "assistant") && typeof t.content === "string");
+    .slice(-6)
+    .filter((t) => (t.role === "user" || t.role === "assistant") && typeof t.content === "string")
+    .map((t) => ({ role: t.role, content: t.content.slice(0, MAX_TURN) }));
 
   const upstream = await model(
     {
@@ -147,11 +161,10 @@ async function ask(input: Record<string, unknown>, signal: AbortSignal) {
           content: system(
             input.lens,
             `They're talking to you directly, so you can say more than a margin comment. Answer properly in 1 to 3 short sentences of plain text, no markdown, unless they ask for a list. Draw on the whole page. If they ask for ideas, give them. If they ask you to write their text, offer a way in instead.`,
-            page(String(input.title ?? ""), String(input.text ?? "")),
           ),
         },
         ...history,
-        { role: "user", content: message },
+        { role: "user", content: `${page(String(input.title ?? ""), String(input.text ?? ""))}\n\n${message}` },
       ],
       max_tokens: 700,
       temperature: 0.7,
@@ -186,9 +199,16 @@ async function ask(input: Record<string, unknown>, signal: AbortSignal) {
 }
 
 export async function POST(req: Request) {
+  if (!fromOwnSite(req.headers.get("origin"), req.headers.get("host"), SITES)) return fail("Not allowed.", 403);
+
+  const visitor = req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0] ?? "local";
+  if (!allow(visitor)) return fail("That's a lot of thinking. Give it a minute.", 429);
+
   let input: Record<string, unknown>;
   try {
-    input = await req.json();
+    const body = await req.text();
+    if (body.length > MAX_BODY) return fail("This page is too long to send.", 413);
+    input = JSON.parse(body);
   } catch {
     return fail("Bad request.", 400);
   }
@@ -196,6 +216,8 @@ export async function POST(req: Request) {
     return input.mode === "ask" ? await ask(input, req.signal) : await note(input, req.signal);
   } catch (err) {
     if (req.signal.aborted) return new Response(null, { status: 499 });
-    return fail(err instanceof Error ? err.message : "Your partner couldn't respond.", 502);
+    // Only the name: a malformed key can appear in the message of a fetch error.
+    console.error("partner failed", err instanceof Error ? err.name : "unknown");
+    return fail("Your partner couldn't respond. Try again in a moment.", 502);
   }
 }

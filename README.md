@@ -6,12 +6,13 @@ A writing page with a thinking partner inside it. Write in the Tiptap editor and
 
 - AI: any OpenAI-compatible endpoint, set in `.env.local`
 - Pages are saved in the browser (localStorage)
+- The whole app sits behind one shared password (`ACCESS_PASSWORD`)
 
 ## Run
 
 ```bash
 npm install
-cp .env.example .env.local   # fill in AI_BASE_URL, AI_API_KEY, AI_MODEL
-npm run dev
+cp .env.example .env.local   # fill in every value
+npm run dev -- -p 3002
 npm test                     # comment anchoring logic
 ```

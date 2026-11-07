@@ -57,7 +57,7 @@ const Editor = forwardRef<EditorHandle, Props>(function Editor({ content, onChan
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
-      StarterKit,
+      StarterKit.configure({ link: { openOnClick: false } }),
       NoteAnchor,
       Placeholder.configure({ placeholder: "Write anything. I'll read along." }),
     ],

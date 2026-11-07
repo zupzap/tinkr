@@ -5,7 +5,7 @@ import Chat from "./Chat";
 import Editor, { type Change, type EditorHandle } from "./Editor";
 import Margin from "./Margin";
 import { kept } from "@/lib/moment";
-import { load, newDoc, save, STARTERS, uid, type Doc, type Move, type Note, type Starter } from "@/lib/store";
+import { load, markNoticeSeen, newDoc, noticeSeen, save, STARTERS, uid, type Doc, type Move, type Note, type Starter } from "@/lib/store";
 
 const MIN_GAP_MS = 9000; // least time between comments, unless it's a natural moment
 const MIN_NEW_CHARS = 30;
@@ -46,6 +46,7 @@ export default function Tinkr() {
   const [panel, setPanel] = useState<Panel>(null);
   const [confirmDelete, setConfirmDelete] = useState("");
   const [saveFailed, setSaveFailed] = useState(false);
+  const [notice, setNotice] = useState(false);
 
   const editor = useRef<EditorHandle>(null);
   const sheet = useRef<HTMLDivElement>(null);
@@ -60,6 +61,7 @@ export default function Tinkr() {
     const saved = load();
     setDocs(saved.docs);
     setActiveId(saved.activeId);
+    setNotice(!noticeSeen());
   }, []);
 
   useEffect(() => {
@@ -319,6 +321,21 @@ export default function Tinkr() {
           onActive={setActiveNote}
         />
       </div>
+
+      {notice && (
+        <p className="tinkr-notice">
+          Your pages stay in this browser, but what you write is sent to an AI provider so tinkr can comment on it.
+          <button
+            type="button"
+            onClick={() => {
+              markNoticeSeen();
+              setNotice(false);
+            }}
+          >
+            Got it
+          </button>
+        </p>
+      )}
 
       {panel === "pages" && (
         <button type="button" className="tinkr-scrim" aria-label="Close" onClick={() => setPanel(null)} />
