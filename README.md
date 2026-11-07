@@ -2,16 +2,16 @@
 
 Make thinking and brainstorming fun, with AI.
 
-Status: empty Next.js scaffold. Core mechanic and AI provider not chosen yet.
+A writing page with a thinking partner inside it. Write in the Tiptap editor and tinkr reads along, leaving comments in the margin, threaded to the passage they are about. It questions and pushes back, but never writes your prose. The Product lens and the PRD, Decision and Research starters are built for product managers.
 
-Decided so far:
-- Web app (Next.js 15, TypeScript, Tailwind, App Router, `src/`)
-- Solo thinkers first
+- AI: any OpenAI-compatible endpoint, set in `.env.local`
+- Pages are saved in the browser (localStorage)
 
 ## Run
 
 ```bash
 npm install
-cp .env.example .env.local   # fill in when a provider is picked
+cp .env.example .env.local   # fill in AI_BASE_URL, AI_API_KEY, AI_MODEL
 npm run dev
+npm test                     # comment anchoring logic
 ```
